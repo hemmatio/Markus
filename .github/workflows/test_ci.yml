@@ -144,7 +144,8 @@ jobs:
       contents: read
     needs: setup
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repo
+        uses: actions/checkout@v4
 
       - name: Download setup artifacts
         uses: actions/download-artifact@v4
@@ -217,7 +218,8 @@ jobs:
       contents: read
     needs: setup
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repo
+        uses: actions/checkout@v4
 
       - name: Download setup artifacts
         uses: actions/download-artifact@v4
