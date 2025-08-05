@@ -112,6 +112,8 @@ jobs:
           path: |
             config/database.yml
             public/packs
+            public/javascripts/translations.json
+            requirements-*.txt
             coverage
 
   test_rspec:
