@@ -7,9 +7,11 @@ on:
       - master
 
 jobs:
-  test:
+  setup:
     if: github.event.pull_request.draft == false
     runs-on: ubuntu-22.04
+    outputs:
+      cache-key: ${{ steps.pip-cache.outputs.dir }}
     services:
       postgres:
         image: postgres:14
@@ -34,13 +36,6 @@ jobs:
           --health-timeout 5s
           --health-retries 5
           --entrypoint redis-server
-    env:
-      BUNDLE_WITHOUT: development:production:console:unicorn
-      RAILS_ENV: test
-      NODE_ENV: test
-      RSPEC_RENDER_VIEWS: true
-    permissions:
-      contents: read
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
@@ -88,30 +83,29 @@ jobs:
           ./venv/bin/pip install -r requirements-jupyter.txt -r requirements-scanner.txt -r requirements-qr.txt
           ./venv/bin/playwright install chromium
           ./venv/bin/playwright install-deps chromium
-      - name: Configure server
-        run: |
-          sudo rm -f /etc/localtime
-          sudo ln -s /usr/share/zoneinfo/US/Eastern /etc/localtime
-          sudo sed -ri 's/(rights=")none("\s+pattern="PDF")/\1read\2/' /etc/ImageMagick-6/policy.xml
-          cp config/database.yml.ci config/database.yml
-      - name: Build assets
-        run: |
-          bundle exec rake javascript:build
-          bundle exec rake css:build
-      - name: Set up database
-        run: bundle exec rails db:migrate
-      - name: Install  chromedriver
+      - name: Install chromedriver
         uses: nanasess/setup-chromedriver@v2
       - name: Run chromedriver
         run: chromedriver --port=9515 --whitelisted-ips &
+
+  rspec:
+    needs: setup
+    runs-on: ubuntu-22.04
+    env:
+      RAILS_ENV: test
+      MARKUS__PYTHON: ./venv/bin/python3
+      BUNDLE_WITHOUT: development:production:console:unicorn
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build assets and DB
+        run: |
+          bundle exec rake javascript:build
+          bundle exec rake css:build
+          bundle exec rails db:migrate
       - name: Run rspec tests
         run: bundle exec rspec
-        env:
-          MARKUS__PYTHON: ./venv/bin/python3
       - name: Run rspec system tests
         run: bundle exec rspec spec/system
-        env:
-          MARKUS__PYTHON: ./venv/bin/python3
       - name: Coveralls Parallel (rspec)
         uses: coverallsapp/github-action@v2
         with:
@@ -119,6 +113,14 @@ jobs:
           flag-name: rspec
           parallel: true
           file: coverage/lcov.info
+
+  jest:
+    needs: setup
+    runs-on: ubuntu-22.04
+    env:
+      NODE_ENV: test
+    steps:
+      - uses: actions/checkout@v4
       - name: Run jest tests
         run: npm run test-cov
       - name: Coveralls Parallel (jest)
@@ -130,8 +132,7 @@ jobs:
           file: coverage/lcov.info
 
   finish:
-    needs: test
-    if: github.event.pull_request.draft == false
+    needs: [rspec, jest]
     runs-on: ubuntu-22.04
     permissions:
       pull-requests: write
