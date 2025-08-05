@@ -9,5 +9,5 @@ window.$ = window.jQuery = global.jQuery = global.$ = $;
 
 // i18n-js
 import {I18n} from "i18n-js";
-import translations from "../public/javascripts/translations.json";
+import translations from "translations.json";
 window.I18n = new I18n(translations);
