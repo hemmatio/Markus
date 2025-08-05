@@ -84,6 +84,7 @@ jobs:
             ${{ runner.os }}-playwright-
       - name: Install python packages and playwright dependencies
         run: |
+          cd $GITHUB_WORKSPACE
           python3.10 -m venv venv
           ./venv/bin/pip install -r requirements-jupyter.txt -r requirements-scanner.txt -r requirements-qr.txt
           ./venv/bin/playwright install chromium
