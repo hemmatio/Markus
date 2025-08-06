@@ -164,6 +164,11 @@ jobs:
           cache: npm
       - name: Install npm packages
         run: npm ci
+      - name: Set up ruby and cache gems
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: ruby-3.3
+          bundler-cache: true
       - name: Build assets
         run: |
           bundle exec rake javascript:build
