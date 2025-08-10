@@ -108,17 +108,26 @@ jobs:
           bundle exec rake javascript:build
           bundle exec rake css:build
 
+      - name: Create binstubs for common executables
+        run: |
+          bundle binstubs bundler rake rails rspec --path=bin
+          # ensure local node bin is on PATH during build
+          echo "$PWD/node_modules/.bin" >> $GITHUB_PATH
+
+      - name: Pack prepared workspace
+        run: |
+          tar -czf workspace.tgz \
+            --exclude-vcs \
+            --exclude='./tmp/*' \
+            --exclude='./log/*' \
+            --exclude='./coverage/*' \
+            .
+
       - name: Upload setup workspace
         uses: actions/upload-artifact@v4
         with:
           name: setup-workspace
-          path: |
-            .
-            !.git/
-            !tmp/
-            !log/
-            !coverage/
-            !**/*.tmp
+          path: workspace.tgz
 
   test_rspec:
     needs: setup
@@ -157,6 +166,15 @@ jobs:
           name: setup-workspace
           path: .
 
+      - name: Extract prepared workspace
+        run: tar -xzf workspace.tgz
+
+      - name: Wire up PATH and Bundler
+        run: |
+          echo "$PWD/bin" >> $GITHUB_PATH
+          echo "$PWD/node_modules/.bin" >> $GITHUB_PATH
+          bundle config set path 'vendor/bundle'
+
       - name: Set up Ruby
         uses: ruby/setup-ruby@v1
         with:
@@ -181,15 +199,15 @@ jobs:
         run: chromedriver --port=9515 --whitelisted-ips &
 
       - name: DB migrate
-        run: bundle exec rails db:migrate
+        run: bin/rails db:migrate
 
       - name: RSpec unit
-        run: bundle exec rspec
+        run: bin/rspec
         env:
           MARKUS__PYTHON: ./venv/bin/python3
 
       - name: RSpec system
-        run: bundle exec rspec spec/system
+        run: bin/rspec spec/system
         env:
           MARKUS__PYTHON: ./venv/bin/python3
 
@@ -240,6 +258,12 @@ jobs:
         with:
           node-version: 18
           cache: npm
+
+      - name: Extract prepared workspace
+        run: tar -xzf workspace.tgz
+
+      - name: Wire up PATH
+        run: echo "$PWD/node_modules/.bin" >> $GITHUB_PATH
 
       - name: Jest
         run: npm run test-cov
