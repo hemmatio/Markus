@@ -7,7 +7,7 @@ on:
       - master
 
 jobs:
-  test:
+  setup:
     if: github.event.pull_request.draft == false
     runs-on: ubuntu-22.04
     services:
@@ -52,12 +52,19 @@ jobs:
         uses: ruby/setup-ruby@v1
         with:
           ruby-version: ruby-3.3
-          bundler-cache: true
+          bundler-cache: false
+
+      - name: Bundle install to vendor
+        run: |
+          bundle config set path 'vendor/bundle'
+          bundle install --jobs 4 --retry 3
+
       - name: Set up node and cache packages
         uses: actions/setup-node@v4
         with:
           node-version: 18
           cache: npm
+
       - name: Install npm packages
         run: npm ci
       - name: Install python
@@ -88,40 +95,180 @@ jobs:
           ./venv/bin/pip install -r requirements-jupyter.txt -r requirements-scanner.txt
           ./venv/bin/playwright install chromium
           ./venv/bin/playwright install-deps chromium
+
       - name: Configure server
         run: |
           sudo rm -f /etc/localtime
           sudo ln -s /usr/share/zoneinfo/US/Eastern /etc/localtime
           sudo sed -ri 's/(rights=")none("\s+pattern="PDF")/\1read\2/' /etc/ImageMagick-6/policy.xml
           cp config/database.yml.ci config/database.yml
+
       - name: Build assets
         run: |
           bundle exec rake javascript:build
           bundle exec rake css:build
-      - name: Set up database
-        run: bundle exec rails db:migrate
-      - name: Install  chromedriver
+
+      - name: Create binstubs for common executables
+        run: |
+          bundle binstubs bundler rake rails rspec --path=bin
+          # ensure local node bin is on PATH during build
+          echo "$PWD/node_modules/.bin" >> $GITHUB_PATH
+
+      - name: Pack prepared workspace
+        run: |
+          tar -czf workspace.tgz \
+            --exclude-vcs \
+            --exclude='./tmp/*' \
+            --exclude='./log/*' \
+            --exclude='./coverage/*' \
+            .
+
+      - name: Upload setup workspace
+        uses: actions/upload-artifact@v4
+        with:
+          name: setup-workspace
+          path: workspace.tgz
+
+  test_rspec:
+    needs: setup
+    runs-on: ubuntu-22.04
+    services:
+      postgres:
+        image: postgres:14
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: markus_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+          --entrypoint redis-server
+    env:
+      BUNDLE_WITHOUT: development:production:console:unicorn
+      RAILS_ENV: test
+      NODE_ENV: test
+      RSPEC_RENDER_VIEWS: true
+      BUNDLE_PATH: vendor/bundle
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: setup-workspace
+          path: .
+
+      - name: Extract prepared workspace
+        run: tar -xzf workspace.tgz
+
+      - name: Wire up PATH and Bundler
+        run: |
+          echo "$PWD/bin" >> $GITHUB_PATH
+          echo "$PWD/node_modules/.bin" >> $GITHUB_PATH
+          bundle config set path 'vendor/bundle'
+
+      - name: Set up Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: ruby-3.3
+          bundler-cache: false
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+          cache: npm
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install chromedriver
         uses: nanasess/setup-chromedriver@v2
-      - name: Run chromedriver
+
+      - name: Start chromedriver
         run: chromedriver --port=9515 --whitelisted-ips &
-      - name: Run rspec tests
-        run: bundle exec rspec
+
+      - name: DB migrate
+        run: bin/rails db:migrate
+
+      - name: RSpec unit
+        run: bin/rspec
         env:
           MARKUS__PYTHON: ./venv/bin/python3
-      - name: Run rspec system tests
-        run: bundle exec rspec spec/system
+
+      - name: RSpec system
+        run: bin/rspec spec/system
         env:
           MARKUS__PYTHON: ./venv/bin/python3
-      - name: Coveralls Parallel (rspec)
+
+      - name: Coveralls, rspec
         uses: coverallsapp/github-action@v2
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           flag-name: rspec
           parallel: true
           file: coverage/lcov.info
-      - name: Run jest tests
+
+  test_jest:
+    needs: setup
+    runs-on: ubuntu-22.04
+    services:
+      postgres:
+        image: postgres:14
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: markus_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+          --entrypoint redis-server
+    env:
+      RAILS_ENV: test
+      NODE_ENV: test
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: setup-workspace
+          path: .
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+          cache: npm
+
+      - name: Extract prepared workspace
+        run: tar -xzf workspace.tgz
+
+      - name: Wire up PATH
+        run: echo "$PWD/node_modules/.bin" >> $GITHUB_PATH
+
+      - name: Jest
         run: npm run test-cov
-      - name: Coveralls Parallel (jest)
+
+      - name: Coveralls, jest
         uses: coverallsapp/github-action@v2
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
@@ -130,11 +277,8 @@ jobs:
           file: coverage/lcov.info
 
   finish:
-    needs: test
-    if: github.event.pull_request.draft == false
+    needs: [test_rspec, test_jest]
     runs-on: ubuntu-22.04
-    permissions:
-      pull-requests: write
     steps:
       - name: Coveralls Finished
         uses: coverallsapp/github-action@v2
